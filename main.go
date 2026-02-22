@@ -27,8 +27,9 @@ type ProcessData struct {
 }
 
 type Snapshot struct {
-	Time      time.Time
-	Processes []ProcessData
+	Time    time.Time
+	Procs   []ProcessData // process-level (CPU / Mem tabs)
+	Threads []ProcessData // thread-level  (Threads tab)
 }
 
 type Series struct {
@@ -40,6 +41,7 @@ type APIResponse struct {
 	Timestamps []string `json:"timestamps"`
 	CPU        []Series `json:"cpu"`
 	Mem        []Series `json:"mem"`
+	Thread     []Series `json:"thread"`
 	TopN       int      `json:"topN"`
 	Interval   float64  `json:"interval"`
 }
@@ -89,15 +91,34 @@ func (c *Collector) Start() {
 }
 
 func (c *Collector) collect() (Snapshot, error) {
-	out, err := exec.Command("top", "-b", "-n", "1").Output()
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("running top: %w", err)
+	type result struct {
+		data []ProcessData
+		err  error
 	}
-	procs, err := parseTop(out)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("parsing top output: %w", err)
+	procCh := make(chan result, 1)
+	thrCh := make(chan result, 1)
+
+	run := func(ch chan result, args ...string) {
+		out, err := exec.Command("top", args...).Output()
+		if err != nil {
+			ch <- result{err: fmt.Errorf("top %v: %w", args, err)}
+			return
+		}
+		data, err := parseTop(out)
+		ch <- result{data: data, err: err}
 	}
-	return Snapshot{Time: time.Now(), Processes: procs}, nil
+
+	go run(procCh, "-b", "-n", "1")
+	go run(thrCh, "-b", "-n", "1", "-H")
+
+	pr, tr := <-procCh, <-thrCh
+	if pr.err != nil {
+		return Snapshot{}, pr.err
+	}
+	if tr.err != nil {
+		return Snapshot{}, tr.err
+	}
+	return Snapshot{Time: time.Now(), Procs: pr.data, Threads: tr.data}, nil
 }
 
 // parseTop parses `top -b -n 1` output and returns all processes with both
@@ -149,23 +170,23 @@ func parseTop(output []byte) ([]ProcessData, error) {
 	return procs, nil
 }
 
-// buildSeries constructs a sorted top-n time series from snapshots using the
-// provided value extractor. Series are ordered by descending sum across all
-// snapshots so the busiest processes appear first in the legend.
-func buildSeries(snapshots []Snapshot, n int, val func(ProcessData) float64) []Series {
+// buildSeries constructs a sorted top-n time series from per-snapshot process
+// slices. Series are ordered by descending sum so the busiest entries appear
+// first in the legend.
+func buildSeries(samples [][]ProcessData, n int, val func(ProcessData) float64) []Series {
 	nameSet := make(map[string]bool)
-	for _, snap := range snapshots {
-		for _, p := range snap.Processes {
+	for _, procs := range samples {
+		for _, p := range procs {
 			nameSet[p.Name] = true
 		}
 	}
 
 	data := make(map[string][]float64, len(nameSet))
 	for name := range nameSet {
-		data[name] = make([]float64, len(snapshots))
+		data[name] = make([]float64, len(samples))
 	}
-	for i, snap := range snapshots {
-		for _, p := range snap.Processes {
+	for i, procs := range samples {
+		for _, p := range procs {
 			data[p.Name][i] = val(p)
 		}
 	}
@@ -210,13 +231,18 @@ func (c *Collector) GetAPIResponse() APIResponse {
 	}
 
 	timestamps := make([]string, len(c.snapshots))
+	procSamples := make([][]ProcessData, len(c.snapshots))
+	thrSamples := make([][]ProcessData, len(c.snapshots))
 	for i, snap := range c.snapshots {
 		timestamps[i] = snap.Time.Format(time.RFC3339)
+		procSamples[i] = snap.Procs
+		thrSamples[i] = snap.Threads
 	}
 
 	resp.Timestamps = timestamps
-	resp.CPU = buildSeries(c.snapshots, c.topN, func(p ProcessData) float64 { return p.CPU })
-	resp.Mem = buildSeries(c.snapshots, c.topN, func(p ProcessData) float64 { return p.Mem })
+	resp.CPU = buildSeries(procSamples, c.topN, func(p ProcessData) float64 { return p.CPU })
+	resp.Mem = buildSeries(procSamples, c.topN, func(p ProcessData) float64 { return p.Mem })
+	resp.Thread = buildSeries(thrSamples, c.topN, func(p ProcessData) float64 { return p.CPU })
 	return resp
 }
 

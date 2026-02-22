@@ -184,6 +184,7 @@
     <div class="tabs">
       <button class="tab active" data-tab="cpu">CPU</button>
       <button class="tab" data-tab="mem">Memory</button>
+      <button class="tab" data-tab="thread">Threads</button>
     </div>
 
     <div class="chart-wrap">
@@ -294,8 +295,8 @@
     function renderChart(data) {
       if (!data || !data.timestamps || data.timestamps.length === 0) return;
 
-      const series = activeTab === 'cpu' ? data.cpu : data.mem;
-      const yLabel = activeTab === 'cpu' ? 'CPU %' : 'Memory %';
+      const series = activeTab === 'cpu' ? data.cpu : activeTab === 'mem' ? data.mem : data.thread;
+      const yLabel = activeTab === 'mem' ? 'Memory %' : 'CPU %';
 
       const labels = data.timestamps.map(t =>
         new Date(t).toLocaleTimeString([], { hour12: false })
