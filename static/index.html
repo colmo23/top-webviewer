@@ -33,6 +33,12 @@
       letter-spacing: 0.02em;
     }
 
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
     .live-badge {
       display: flex;
       align-items: center;
@@ -40,6 +46,21 @@
       font-size: 0.75rem;
       color: #8b949e;
     }
+
+    #pauseBtn {
+      font-size: 0.75rem;
+      font-family: inherit;
+      padding: 0.25rem 0.65rem;
+      border-radius: 0.3rem;
+      border: 1px solid #30363d;
+      background: #21262d;
+      color: #c9d1d9;
+      cursor: pointer;
+      line-height: 1.4;
+    }
+
+    #pauseBtn:hover { background: #30363d; }
+    #pauseBtn.paused { border-color: #d29922; color: #d29922; }
 
     .dot {
       width: 8px;
@@ -111,9 +132,12 @@
 <body>
   <header>
     <h1>Top CPU Monitor</h1>
-    <div class="live-badge">
-      <div class="dot" id="dot"></div>
-      <span id="statusText">connecting…</span>
+    <div class="header-right">
+      <button id="pauseBtn">Pause</button>
+      <div class="live-badge">
+        <div class="dot" id="dot"></div>
+        <span id="statusText">connecting…</span>
+      </div>
     </div>
   </header>
 
@@ -216,8 +240,8 @@
 
     // ── Data fetching ─────────────────────────────────────────────────────────
 
-    const dot        = document.getElementById('dot');
-    const statusText = document.getElementById('statusText');
+    const dot         = document.getElementById('dot');
+    const statusText  = document.getElementById('statusText');
     const placeholder = document.getElementById('placeholder');
 
     function setStatus(ok, msg) {
@@ -271,22 +295,60 @@
       setStatus(true, 'live');
     }
 
+    // ── Polling ───────────────────────────────────────────────────────────────
+
+    let paused       = false;
+    let timerId      = null;
+    let pollInterval = 2000;
+
     async function poll() {
       try {
         const res = await fetch('/api/data');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        update(await res.json());
+        const data = await res.json();
+        // A pause click may have arrived while the fetch was in-flight; drop
+        // the result rather than overwriting the frozen chart.
+        if (paused) return;
+        update(data);
       } catch (e) {
-        setStatus(false, 'error: ' + e.message);
+        if (!paused) setStatus(false, 'error: ' + e.message);
       }
     }
 
-    // First call immediately, then schedule at the server's own interval.
+    function startPolling() {
+      if (timerId !== null) return;
+      timerId = setInterval(poll, pollInterval);
+    }
+
+    function stopPolling() {
+      clearInterval(timerId);
+      timerId = null;
+    }
+
+    // ── Pause / resume ────────────────────────────────────────────────────────
+
+    const pauseBtn = document.getElementById('pauseBtn');
+    pauseBtn.addEventListener('click', () => {
+      paused = !paused;
+      pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+      pauseBtn.classList.toggle('paused', paused);
+      if (paused) {
+        stopPolling();
+        setStatus(true, 'paused');
+        dot.style.animationPlayState = 'paused';
+      } else {
+        dot.style.animationPlayState = '';
+        poll();
+        startPolling();
+      }
+    });
+
+    // First call immediately; once it resolves read the server interval and
+    // start the repeating timer.
     poll().then(() => {
-      const data = chart.data;
-      // Read interval from meta tag populated after first poll.
       const secs = parseFloat(document.getElementById('metaInterval').textContent) || 2;
-      setInterval(poll, Math.max(secs * 1000, 500));
+      pollInterval = Math.max(secs * 1000, 500);
+      startPolling();
     });
   })();
   </script>
