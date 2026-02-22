@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Top CPU Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1.5rem;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+    }
+
+    h1 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #f0f6fc;
+      letter-spacing: 0.02em;
+    }
+
+    .live-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      color: #8b949e;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3fb950;
+      flex-shrink: 0;
+    }
+
+    .dot.error { background: #f85149; animation: none; }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+    .dot { animation: blink 2s ease-in-out infinite; }
+
+    main {
+      flex: 1;
+      padding: 1rem 1.5rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      font-size: 0.72rem;
+    }
+
+    .tag {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 0.3rem;
+      padding: 0.25rem 0.6rem;
+      color: #8b949e;
+    }
+
+    .tag b { color: #58a6ff; font-weight: 600; }
+
+    .chart-wrap {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 0.5rem;
+      padding: 1.25rem 1.25rem 1rem;
+      flex: 1;
+      min-height: 420px;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chart-wrap canvas { flex: 1; min-height: 0; }
+
+    #placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #484f58;
+      font-size: 0.85rem;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Top CPU Monitor</h1>
+    <div class="live-badge">
+      <div class="dot" id="dot"></div>
+      <span id="statusText">connecting…</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="meta">
+      <span class="tag">top <b id="metaN">—</b> processes</span>
+      <span class="tag">every <b id="metaInterval">—</b> s</span>
+      <span class="tag"><b id="metaPoints">0</b> data points</span>
+      <span class="tag">updated <b id="metaUpdated">—</b></span>
+    </div>
+
+    <div class="chart-wrap">
+      <div id="placeholder">Waiting for first sample…</div>
+      <canvas id="chart"></canvas>
+    </div>
+  </main>
+
+  <script>
+  (() => {
+    // Palette chosen for legibility on a dark background.
+    const PALETTE = [
+      '#58a6ff', '#f85149', '#3fb950', '#d29922', '#bc8cff',
+      '#ff7b72', '#39d353', '#ffa657', '#79c0ff', '#f2cc60',
+      '#56d364', '#ff9bce', '#a5d6ff', '#ffa198', '#7ee787',
+    ];
+
+    const colorOf = (() => {
+      const map = {};
+      let idx = 0;
+      return name => {
+        if (!map[name]) map[name] = PALETTE[idx++ % PALETTE.length];
+        return map[name];
+      };
+    })();
+
+    // ── Chart setup ──────────────────────────────────────────────────────────
+
+    const ctx = document.getElementById('chart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            position: 'top',
+            align: 'start',
+            labels: {
+              color: '#8b949e',
+              usePointStyle: true,
+              pointStyleWidth: 10,
+              boxHeight: 6,
+              font: { size: 11, family: 'monospace' },
+              padding: 16,
+            },
+          },
+          tooltip: {
+            backgroundColor: '#0d1117',
+            borderColor: '#30363d',
+            borderWidth: 1,
+            titleColor: '#8b949e',
+            bodyColor: '#c9d1d9',
+            padding: 10,
+            callbacks: {
+              label: ctx =>
+                ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: '#484f58',
+              maxTicksLimit: 10,
+              maxRotation: 0,
+            },
+            grid: { color: '#21262d' },
+          },
+          y: {
+            beginAtZero: true,
+            suggestedMax: 100,
+            ticks: {
+              color: '#484f58',
+              callback: v => v + '%',
+            },
+            grid: { color: '#21262d' },
+            title: {
+              display: true,
+              text: 'CPU %',
+              color: '#484f58',
+              font: { size: 11 },
+            },
+          },
+        },
+      },
+    });
+
+    // ── Data fetching ─────────────────────────────────────────────────────────
+
+    const dot        = document.getElementById('dot');
+    const statusText = document.getElementById('statusText');
+    const placeholder = document.getElementById('placeholder');
+
+    function setStatus(ok, msg) {
+      statusText.textContent = msg;
+      dot.className = ok ? 'dot' : 'dot error';
+    }
+
+    function update(data) {
+      if (!data.timestamps || data.timestamps.length === 0) return;
+
+      // Format timestamps as HH:MM:SS for the x-axis labels.
+      const labels = data.timestamps.map(t => {
+        const d = new Date(t);
+        return d.toLocaleTimeString([], { hour12: false });
+      });
+
+      // Build a lookup of existing datasets so we can reuse them
+      // (preserving colour assignments across redraws).
+      const existing = {};
+      chart.data.datasets.forEach(ds => { existing[ds.label] = ds; });
+
+      chart.data.labels = labels;
+      chart.data.datasets = (data.series || []).map(s => {
+        const color = colorOf(s.name);
+        if (existing[s.name]) {
+          existing[s.name].data = s.cpu;
+          return existing[s.name];
+        }
+        return {
+          label: s.name,
+          data: s.cpu,
+          borderColor: color,
+          backgroundColor: color + '18',
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          tension: 0.25,
+          fill: false,
+        };
+      });
+
+      chart.update('none');
+
+      placeholder.style.display = 'none';
+      document.getElementById('metaN').textContent        = data.topN ?? '—';
+      document.getElementById('metaInterval').textContent = data.interval ?? '—';
+      document.getElementById('metaPoints').textContent   = labels.length;
+      document.getElementById('metaUpdated').textContent  =
+        new Date().toLocaleTimeString([], { hour12: false });
+
+      setStatus(true, 'live');
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch('/api/data');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        update(await res.json());
+      } catch (e) {
+        setStatus(false, 'error: ' + e.message);
+      }
+    }
+
+    // First call immediately, then schedule at the server's own interval.
+    poll().then(() => {
+      const data = chart.data;
+      // Read interval from meta tag populated after first poll.
+      const secs = parseFloat(document.getElementById('metaInterval').textContent) || 2;
+      setInterval(poll, Math.max(secs * 1000, 500));
+    });
+  })();
+  </script>
+</body>
+</html>
