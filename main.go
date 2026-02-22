@@ -21,8 +21,9 @@ import (
 var staticFiles embed.FS
 
 type ProcessData struct {
-	Name string  `json:"name"`
-	CPU  float64 `json:"cpu"`
+	Name string
+	CPU  float64
+	Mem  float64
 }
 
 type Snapshot struct {
@@ -31,13 +32,14 @@ type Snapshot struct {
 }
 
 type Series struct {
-	Name string    `json:"name"`
-	CPU  []float64 `json:"cpu"`
+	Name   string    `json:"name"`
+	Values []float64 `json:"values"`
 }
 
 type APIResponse struct {
 	Timestamps []string `json:"timestamps"`
-	Series     []Series `json:"series"`
+	CPU        []Series `json:"cpu"`
+	Mem        []Series `json:"mem"`
 	TopN       int      `json:"topN"`
 	Interval   float64  `json:"interval"`
 }
@@ -91,25 +93,26 @@ func (c *Collector) collect() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("running top: %w", err)
 	}
-	procs, err := parseTop(out, c.topN)
+	procs, err := parseTop(out)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("parsing top output: %w", err)
 	}
 	return Snapshot{Time: time.Now(), Processes: procs}, nil
 }
 
-// parseTop parses `top -b -n 1` output and returns the top n processes by CPU,
-// aggregating across processes that share the same command name.
-func parseTop(output []byte, n int) ([]ProcessData, error) {
+// parseTop parses `top -b -n 1` output and returns all processes with both
+// CPU and memory usage, aggregating across processes that share a command name.
+func parseTop(output []byte) ([]ProcessData, error) {
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	inProcs := false
-	agg := make(map[string]float64)
-	var order []string // tracks first-seen order to deduplicate
+
+	type agg struct{ cpu, mem float64 }
+	aggMap := make(map[string]*agg)
+	var order []string
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !inProcs {
-			// The process table header contains both %CPU and COMMAND.
 			if strings.Contains(line, "%CPU") && strings.Contains(line, "COMMAND") {
 				inProcs = true
 			}
@@ -126,26 +129,72 @@ func parseTop(output []byte, n int) ([]ProcessData, error) {
 		if err != nil {
 			continue
 		}
+		mem, err := strconv.ParseFloat(fields[9], 64)
+		if err != nil {
+			continue
+		}
 		name := fields[11]
-		if _, exists := agg[name]; !exists {
+		if _, exists := aggMap[name]; !exists {
+			aggMap[name] = &agg{}
 			order = append(order, name)
 		}
-		agg[name] += cpu
+		aggMap[name].cpu += cpu
+		aggMap[name].mem += mem
 	}
 
-	// Sort names by descending aggregated CPU.
-	sort.Slice(order, func(i, j int) bool {
-		return agg[order[i]] > agg[order[j]]
-	})
-
-	if n > len(order) {
-		n = len(order)
-	}
-	procs := make([]ProcessData, n)
-	for i := range procs {
-		procs[i] = ProcessData{Name: order[i], CPU: agg[order[i]]}
+	procs := make([]ProcessData, len(order))
+	for i, name := range order {
+		procs[i] = ProcessData{Name: name, CPU: aggMap[name].cpu, Mem: aggMap[name].mem}
 	}
 	return procs, nil
+}
+
+// buildSeries constructs a sorted top-n time series from snapshots using the
+// provided value extractor. Series are ordered by descending sum across all
+// snapshots so the busiest processes appear first in the legend.
+func buildSeries(snapshots []Snapshot, n int, val func(ProcessData) float64) []Series {
+	nameSet := make(map[string]bool)
+	for _, snap := range snapshots {
+		for _, p := range snap.Processes {
+			nameSet[p.Name] = true
+		}
+	}
+
+	data := make(map[string][]float64, len(nameSet))
+	for name := range nameSet {
+		data[name] = make([]float64, len(snapshots))
+	}
+	for i, snap := range snapshots {
+		for _, p := range snap.Processes {
+			data[p.Name][i] = val(p)
+		}
+	}
+
+	type entry struct {
+		name string
+		vals []float64
+		sum  float64
+	}
+	entries := make([]entry, 0, len(data))
+	for name, vals := range data {
+		var sum float64
+		for _, v := range vals {
+			sum += v
+		}
+		entries = append(entries, entry{name, vals, sum})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].sum > entries[j].sum
+	})
+
+	if n > len(entries) {
+		n = len(entries)
+	}
+	series := make([]Series, n)
+	for i := range series {
+		series[i] = Series{Name: entries[i].name, Values: entries[i].vals}
+	}
+	return series
 }
 
 func (c *Collector) GetAPIResponse() APIResponse {
@@ -160,53 +209,14 @@ func (c *Collector) GetAPIResponse() APIResponse {
 		return resp
 	}
 
-	// Determine the union of all process names seen across snapshots.
-	nameSet := make(map[string]bool)
-	for _, snap := range c.snapshots {
-		for _, p := range snap.Processes {
-			nameSet[p.Name] = true
-		}
-	}
-
 	timestamps := make([]string, len(c.snapshots))
-	seriesData := make(map[string][]float64, len(nameSet))
-	for name := range nameSet {
-		seriesData[name] = make([]float64, len(c.snapshots))
-	}
-
 	for i, snap := range c.snapshots {
 		timestamps[i] = snap.Time.Format(time.RFC3339)
-		for _, p := range snap.Processes {
-			seriesData[p.Name][i] = p.CPU
-		}
-	}
-
-	// Sort series by total CPU across all snapshots (descending) so the
-	// most active processes appear first in the legend.
-	type entry struct {
-		name string
-		data []float64
-		sum  float64
-	}
-	entries := make([]entry, 0, len(seriesData))
-	for name, data := range seriesData {
-		var sum float64
-		for _, v := range data {
-			sum += v
-		}
-		entries = append(entries, entry{name, data, sum})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].sum > entries[j].sum
-	})
-
-	series := make([]Series, len(entries))
-	for i, e := range entries {
-		series[i] = Series{Name: e.name, CPU: e.data}
 	}
 
 	resp.Timestamps = timestamps
-	resp.Series = series
+	resp.CPU = buildSeries(c.snapshots, c.topN, func(p ProcessData) float64 { return p.CPU })
+	resp.Mem = buildSeries(c.snapshots, c.topN, func(p ProcessData) float64 { return p.Mem })
 	return resp
 }
 

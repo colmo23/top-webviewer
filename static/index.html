@@ -109,6 +109,27 @@
 
     .tag b { color: #58a6ff; font-weight: 600; }
 
+    .tabs {
+      display: flex;
+      gap: 0.25rem;
+      flex-shrink: 0;
+    }
+
+    .tab {
+      font-size: 0.75rem;
+      font-family: inherit;
+      padding: 0.25rem 0.75rem;
+      border-radius: 0.3rem;
+      border: 1px solid #30363d;
+      background: transparent;
+      color: #8b949e;
+      cursor: pointer;
+      line-height: 1.4;
+    }
+
+    .tab:hover { background: #21262d; color: #c9d1d9; }
+    .tab.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+
     .chart-wrap {
       background: #161b22;
       border: 1px solid #30363d;
@@ -158,6 +179,11 @@
       <span class="tag">every <b id="metaInterval">—</b> s</span>
       <span class="tag"><b id="metaPoints">0</b> data points</span>
       <span class="tag">updated <b id="metaUpdated">—</b></span>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="cpu">CPU</button>
+      <button class="tab" data-tab="mem">Memory</button>
     </div>
 
     <div class="chart-wrap">
@@ -257,35 +283,38 @@
     const statusText  = document.getElementById('statusText');
     const placeholder = document.getElementById('placeholder');
 
+    let lastData = null;
+    let activeTab = 'cpu';
+
     function setStatus(ok, msg) {
       statusText.textContent = msg;
       dot.className = ok ? 'dot' : 'dot error';
     }
 
-    function update(data) {
-      if (!data.timestamps || data.timestamps.length === 0) return;
+    function renderChart(data) {
+      if (!data || !data.timestamps || data.timestamps.length === 0) return;
 
-      // Format timestamps as HH:MM:SS for the x-axis labels.
-      const labels = data.timestamps.map(t => {
-        const d = new Date(t);
-        return d.toLocaleTimeString([], { hour12: false });
-      });
+      const series = activeTab === 'cpu' ? data.cpu : data.mem;
+      const yLabel = activeTab === 'cpu' ? 'CPU %' : 'Memory %';
 
-      // Build a lookup of existing datasets so we can reuse them
-      // (preserving colour assignments across redraws).
+      const labels = data.timestamps.map(t =>
+        new Date(t).toLocaleTimeString([], { hour12: false })
+      );
+
+      // Reuse existing dataset objects to preserve colour assignments.
       const existing = {};
       chart.data.datasets.forEach(ds => { existing[ds.label] = ds; });
 
       chart.data.labels = labels;
-      chart.data.datasets = (data.series || []).map(s => {
+      chart.data.datasets = (series || []).map(s => {
         const color = colorOf(s.name);
         if (existing[s.name]) {
-          existing[s.name].data = s.cpu;
+          existing[s.name].data = s.values;
           return existing[s.name];
         }
         return {
           label: s.name,
-          data: s.cpu,
+          data: s.values,
           borderColor: color,
           backgroundColor: color + '18',
           borderWidth: 2,
@@ -296,17 +325,36 @@
         };
       });
 
+      chart.options.scales.y.title.text = yLabel;
       chart.update('none');
 
       placeholder.style.display = 'none';
+    }
+
+    function update(data) {
+      lastData = data;
+      renderChart(data);
+
       document.getElementById('metaN').textContent        = data.topN ?? '—';
       document.getElementById('metaInterval').textContent = data.interval ?? '—';
-      document.getElementById('metaPoints').textContent   = labels.length;
       document.getElementById('metaUpdated').textContent  =
         new Date().toLocaleTimeString([], { hour12: false });
+      document.getElementById('metaPoints').textContent   =
+        data.timestamps ? data.timestamps.length : 0;
 
       setStatus(true, 'live');
     }
+
+    // ── Tabs ──────────────────────────────────────────────────────────────────
+
+    document.querySelectorAll('.tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeTab = btn.dataset.tab;
+        renderChart(lastData);
+      });
+    });
 
     // ── Polling ───────────────────────────────────────────────────────────────
 
