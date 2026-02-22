@@ -92,10 +92,11 @@
       overflow: hidden;
     }
 
-    .meta {
+    .toolbar {
       display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
+      align-items: center;
+      gap: 0.25rem;
+      flex-shrink: 0;
       font-size: 0.72rem;
     }
 
@@ -109,11 +110,7 @@
 
     .tag b { color: #58a6ff; font-weight: 600; }
 
-    .tabs {
-      display: flex;
-      gap: 0.25rem;
-      flex-shrink: 0;
-    }
+    .tag-right { margin-left: auto; }
 
     .tab {
       font-size: 0.75rem;
@@ -174,17 +171,11 @@
   </header>
 
   <main>
-    <div class="meta">
-      <span class="tag">top <b id="metaN">—</b> processes</span>
-      <span class="tag">every <b id="metaInterval">—</b> s</span>
-      <span class="tag"><b id="metaPoints">0</b> data points</span>
-      <span class="tag">updated <b id="metaUpdated">—</b></span>
-    </div>
-
-    <div class="tabs">
+    <div class="toolbar">
       <button class="tab active" data-tab="cpu">CPU</button>
       <button class="tab" data-tab="mem">Memory</button>
       <button class="tab" data-tab="thread">Threads</button>
+      <span class="tag tag-right">top <b id="metaN">—</b> processes</span>
     </div>
 
     <div class="chart-wrap">
@@ -336,12 +327,7 @@
       lastData = data;
       renderChart(data);
 
-      document.getElementById('metaN').textContent        = data.topN ?? '—';
-      document.getElementById('metaInterval').textContent = data.interval ?? '—';
-      document.getElementById('metaUpdated').textContent  =
-        new Date().toLocaleTimeString([], { hour12: false });
-      document.getElementById('metaPoints').textContent   =
-        data.timestamps ? data.timestamps.length : 0;
+      document.getElementById('metaN').textContent = data.topN ?? '—';
 
       setStatus(true, 'live');
     }
@@ -405,10 +391,10 @@
       }
     });
 
-    // First call immediately; once it resolves read the server interval and
-    // start the repeating timer.
+    // First call immediately; once it resolves read the server interval from
+    // the cached data and start the repeating timer.
     poll().then(() => {
-      const secs = parseFloat(document.getElementById('metaInterval').textContent) || 2;
+      const secs = lastData ? (lastData.interval || 2) : 2;
       pollInterval = Math.max(secs * 1000, 500);
       startPolling();
     });
