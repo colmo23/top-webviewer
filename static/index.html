@@ -112,6 +112,24 @@
 
     .tag-right { margin-left: auto; }
 
+    #metaN {
+      width: 3ch;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid #484f58;
+      color: #58a6ff;
+      font-weight: 600;
+      font-size: inherit;
+      font-family: inherit;
+      text-align: center;
+      padding: 0;
+      outline: none;
+      -moz-appearance: textfield;
+    }
+    #metaN::-webkit-outer-spin-button,
+    #metaN::-webkit-inner-spin-button { -webkit-appearance: none; }
+    #metaN:focus { border-bottom-color: #58a6ff; }
+
     .tab {
       font-size: 0.75rem;
       font-family: inherit;
@@ -175,7 +193,7 @@
       <button class="tab active" data-tab="cpu">CPU</button>
       <button class="tab" data-tab="mem">Memory</button>
       <button class="tab" data-tab="thread">Threads</button>
-      <span class="tag tag-right">top <b id="metaN">—</b> processes</span>
+      <span class="tag tag-right">top <input type="number" id="metaN" min="1" max="500" placeholder="—"> processes</span>
     </div>
 
     <div class="chart-wrap">
@@ -327,10 +345,29 @@
       lastData = data;
       renderChart(data);
 
-      document.getElementById('metaN').textContent = data.topN ?? '—';
+      if (document.activeElement !== document.getElementById('metaN')) {
+        document.getElementById('metaN').value = data.topN ?? '';
+      }
 
       setStatus(true, 'live');
     }
+
+    // ── Top-N editor ─────────────────────────────────────────────────────────
+
+    const metaN = document.getElementById('metaN');
+
+    async function submitTopN() {
+      const n = parseInt(metaN.value);
+      if (!n || n < 1 || n > 500) return;
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topN: n }),
+      });
+    }
+
+    metaN.addEventListener('blur', submitTopN);
+    metaN.addEventListener('keydown', e => { if (e.key === 'Enter') metaN.blur(); });
 
     // ── Tabs ──────────────────────────────────────────────────────────────────
 

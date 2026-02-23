@@ -54,6 +54,12 @@ type Collector struct {
 	interval  time.Duration
 }
 
+func (c *Collector) SetTopN(n int) {
+	c.mu.Lock()
+	c.topN = n
+	c.mu.Unlock()
+}
+
 func NewCollector(topN, maxLen int, interval time.Duration) *Collector {
 	return &Collector{
 		snapshots: make([]Snapshot, 0, maxLen),
@@ -267,6 +273,25 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache")
 		json.NewEncoder(w).Encode(collector.GetAPIResponse())
+	})
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			TopN int `json:"topN"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.TopN < 1 || body.TopN > 500 {
+			http.Error(w, "topN must be between 1 and 500", http.StatusBadRequest)
+			return
+		}
+		collector.SetTopN(body.TopN)
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	log.Printf("Listening on http://%s", *addr)
