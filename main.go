@@ -114,8 +114,8 @@ func (c *Collector) collect() (Snapshot, error) {
 		ch <- result{data: data, err: err}
 	}
 
-	go run(procCh, "-b", "-n", "1")
-	go run(thrCh, "-b", "-n", "1", "-H")
+	go run(procCh, "-b", "-n", "2")
+	go run(thrCh, "-b", "-n", "2", "-H")
 
 	pr, tr := <-procCh, <-thrCh
 	if pr.err != nil {
@@ -127,11 +127,13 @@ func (c *Collector) collect() (Snapshot, error) {
 	return Snapshot{Time: time.Now(), Procs: pr.data, Threads: tr.data}, nil
 }
 
-// parseTop parses `top -b -n 1` output and returns all processes with both
-// CPU and memory usage, aggregating across processes that share a command name.
+// parseTop parses `top -b -n 2` output and returns all processes from the
+// second iteration with both CPU and memory usage, aggregating across processes
+// that share a command name. The second iteration has more accurate CPU values.
 func parseTop(output []byte) ([]ProcessData, error) {
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	inProcs := false
+	headerCount := 0
 
 	type agg struct{ cpu, mem float64 }
 	aggMap := make(map[string]*agg)
@@ -139,10 +141,12 @@ func parseTop(output []byte) ([]ProcessData, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		if strings.Contains(line, "%CPU") && strings.Contains(line, "COMMAND") {
+			headerCount++
+			inProcs = (headerCount == 2)
+			continue
+		}
 		if !inProcs {
-			if strings.Contains(line, "%CPU") && strings.Contains(line, "COMMAND") {
-				inProcs = true
-			}
 			continue
 		}
 
