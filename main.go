@@ -258,8 +258,8 @@ func (c *Collector) GetAPIResponse() APIResponse {
 
 func main() {
 	topN := flag.Int("n", 10, "number of top processes to track")
-	interval := flag.Duration("interval", 2*time.Second, "collection interval")
-	history := flag.Int("history", 120, "number of data points to retain")
+	interval := flag.Duration("interval", 1*time.Second, "collection interval")
+	history := flag.Int("history", 240, "number of data points to retain")
 	addr := flag.String("addr", "127.0.0.1:5000", "HTTP listen address")
 	flag.Parse()
 
